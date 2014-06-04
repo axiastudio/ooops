@@ -7,8 +7,6 @@ import java.io.*;
 import java.util.HashMap;
 import java.util.Map;
 
-import static org.junit.Assert.*;
-
 public class OoopsTest {
 
     @Test
@@ -20,7 +18,7 @@ public class OoopsTest {
         Ooops.create()
                 .open("uno:socket,host=localhost,port=8100;urp;StarOffice.ServiceManager")
                 .load(new FileInputStream(new File("test.odt")))
-                .fromMap(map)
+                .map(map)
                 .filter(Filter.writer_pdf_Export)
                 .toStream(new FileOutputStream(new File("test.pdf")));
 

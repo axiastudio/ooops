@@ -90,7 +90,7 @@ public class Ooops {
         return this;
     }
 
-    public Ooops fromMap(Map<String, Object> values){
+    public Ooops map(Map<String, Object> values){
         for( String key: values.keySet() ){
             XTextRange anchor = this.getAnchor(key, component);
             if( anchor != null ){
