@@ -16,7 +16,7 @@ public class OoopsTest {
         map.put("name", "Tiziano");
 
         Ooops.create()
-                .open("uno:socket,host=localhost,port=8100;urp;StarOffice.ServiceManager")
+                .open("uno:socket,host=localhost,port=8997;urp;StarOffice.ServiceManager")
                 .load(new FileInputStream(new File("test.odt")))
                 .map(map)
                 .filter(Filter.writer_pdf_Export)
