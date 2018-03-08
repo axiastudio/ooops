@@ -6,5 +6,17 @@ package com.axiastudio.ooops.filters;
  * Time: 16:59
  */
 public enum Filter {
-    writer8, writer_pdf_Export, writer_MS_Word_97
+
+    ODT("writer8"), PDF("writer_pdf_Export"), DOC("MS Word 97");
+
+    private String filterName;
+
+    Filter(String filterName) {
+        this.filterName = filterName;
+    }
+
+    public String filterName() {
+        return filterName;
+    }
+
 }

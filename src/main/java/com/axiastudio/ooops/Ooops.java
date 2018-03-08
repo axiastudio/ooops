@@ -4,24 +4,29 @@ import com.axiastudio.ooops.filters.Filter;
 import com.axiastudio.ooops.streams.OoopsInputStream;
 import com.axiastudio.ooops.streams.OoopsOutputStream;
 import com.sun.star.beans.PropertyValue;
+import com.sun.star.beans.PropertyVetoException;
+import com.sun.star.beans.UnknownPropertyException;
 import com.sun.star.beans.XPropertySet;
 import com.sun.star.bridge.XUnoUrlResolver;
 import com.sun.star.container.NoSuchElementException;
 import com.sun.star.container.XNameAccess;
-import com.sun.star.frame.XComponentLoader;
-import com.sun.star.frame.XStorable;
+import com.sun.star.container.XNamed;
+import com.sun.star.frame.*;
 import com.sun.star.io.IOException;
 import com.sun.star.lang.*;
-import com.sun.star.text.XBookmarksSupplier;
-import com.sun.star.text.XTextContent;
-import com.sun.star.text.XTextRange;
+import com.sun.star.lang.IllegalArgumentException;
+import com.sun.star.table.XCell;
+import com.sun.star.table.XCellRange;
+import com.sun.star.text.*;
+import com.sun.star.uno.Exception;
 import com.sun.star.uno.UnoRuntime;
 import com.sun.star.uno.XComponentContext;
+import com.sun.star.util.CloseVetoException;
+import com.sun.star.util.XCloseable;
+import com.sun.star.view.XSelectionSupplier;
 
-import java.io.ByteArrayOutputStream;
-import java.io.FileNotFoundException;
-import java.io.InputStream;
-import java.io.OutputStream;
+import java.io.*;
+import java.util.List;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -35,7 +40,8 @@ public class Ooops {
 
     private XComponentLoader loader = null;
     private XComponent component = null;
-    private Filter filter = Filter.writer8;
+    private XDispatchHelper dispatchHelper = null;
+    private Filter filter = Filter.ODT;
 
     public static Ooops create() {
         return new Ooops();
@@ -44,17 +50,19 @@ public class Ooops {
     public Ooops open(String connectionString){
         try{
             XComponentContext context = com.sun.star.comp.helper.Bootstrap.createInitialComponentContext(null);
-            XMultiComponentFactory factory = context.getServiceManager();
-            Object objResolver = factory.createInstanceWithContext("com.sun.star.bridge.UnoUrlResolver", context);
+            XMultiComponentFactory serviceManager = context.getServiceManager();
+            Object objResolver = serviceManager.createInstanceWithContext("com.sun.star.bridge.UnoUrlResolver", context);
             XUnoUrlResolver resolver = UnoRuntime.queryInterface(XUnoUrlResolver.class, objResolver);
             Object objectInitial = resolver.resolve(connectionString);
-            factory = UnoRuntime.queryInterface(XMultiComponentFactory.class, objectInitial);
+            XMultiComponentFactory factory = UnoRuntime.queryInterface(XMultiComponentFactory.class, objectInitial);
             XPropertySet properties = UnoRuntime.queryInterface(XPropertySet.class, factory);
             Object objContext = properties.getPropertyValue("DefaultContext");
             context = UnoRuntime.queryInterface(XComponentContext.class, objContext);
             loader = UnoRuntime.queryInterface(XComponentLoader.class, factory.createInstanceWithContext("com.sun.star.frame.Desktop", context));
-        } catch (Exception ex) {
-            Logger.getLogger(Ooops.class.getName()).log(Level.SEVERE, null, ex);
+            dispatchHelper = UnoRuntime.queryInterface(XDispatchHelper.class, factory.createInstanceWithContext("com.sun.star.frame.DispatchHelper", context));
+        } catch (java.lang.Exception ex) {
+            Logger.getLogger(Ooops.class.getName()).log(Level.SEVERE, "Unable to open connection to the listener with connection string '" + connectionString + "'.");
+            return null;
         }
         return this;
     }
@@ -69,6 +77,18 @@ public class Ooops {
             Logger.getLogger(Ooops.class.getName()).log(Level.SEVERE, null, ex);
         }
     }
+
+    public Ooops load(String url){
+        try {
+            component = loader.loadComponentFromURL(url, "_blank", 0, new PropertyValue[0]);
+        } catch (com.sun.star.io.IOException e) {
+            e.printStackTrace();
+        } catch (IllegalArgumentException e) {
+            e.printStackTrace();
+        }
+        return this;
+    }
+
 
     public Ooops load(InputStream inputStream){
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
@@ -86,23 +106,254 @@ public class Ooops {
         }
         byte[] buf = bytes.toByteArray();
         OoopsInputStream ooopsInputStream = new OoopsInputStream(buf);
-        component = loadDocumentComponent(ooopsInputStream);
+        component = loadComponent(ooopsInputStream);
         return this;
     }
 
-    public Ooops map(Map<String, Object> values){
-        for( String key: values.keySet() ){
-            XTextRange anchor = this.getAnchor(key, component);
-            if( anchor != null ){
-                Object value = values.get(key);
-                if( value != null ){
-                    anchor.setString(value.toString());
-                }
+    public Ooops load(byte[] content){
+        /*
+        OfficeInputStream officeInputStream = new OfficeInputStream(content);
+        component = loadComponent(officeInputStream);
+        */
+        InputStream inputStream = new ByteArrayInputStream(content);
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try {
+            byte[] byteBuffer = new byte[4096];
+            int byteBufferLength;
+            while ((byteBufferLength = inputStream.read(byteBuffer)) > 0) {
+                bytes.write(byteBuffer, 0, byteBufferLength);
+            }
+            inputStream.close();
+        } catch (java.io.IOException ex) {
+            Logger.getLogger(Ooops.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        byte[] buf = bytes.toByteArray();
+        OoopsInputStream ooopsInputStream = new OoopsInputStream(buf);
+        component = loadComponent(ooopsInputStream);
+        return this;
+    }
+
+    private XComponent loadComponent(OoopsInputStream inStream){
+        Boolean hidden = Boolean.TRUE;
+        try {
+            PropertyValue[] propertyValue = new PropertyValue[2];
+            propertyValue[0] = new PropertyValue();
+            propertyValue[0].Name = "InputStream";
+            propertyValue[0].Value = inStream;
+            if( hidden ){
+                propertyValue[1] = new PropertyValue();
+                propertyValue[1].Name = "Hidden";
+                propertyValue[1].Value = new Boolean(true);
+            } else {
+                propertyValue[1] = new PropertyValue();
+                propertyValue[1].Name = "Hidden";
+                propertyValue[1].Value = new Boolean(false);
+            }
+            try {
+                return loader.loadComponentFromURL("private:stream", "_blank", 0, propertyValue);
+            } catch (IllegalArgumentException e) {
+                e.printStackTrace();
+            }
+        } catch (com.sun.star.io.IOException ex) {
+            Logger.getLogger(Ooops.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        return null;
+    }
+
+
+    /*
+     *   fills
+     */
+    public Ooops fillBookmark(String name, String value){
+        XTextRange anchor = getTextRange(name, component);
+        if( anchor != null &&  value != null ){
+            anchor.setString(value.toString());
+            //setBookmark(name, anchor); // reset the original bookmark
+        }
+        return this;
+    }
+
+    public Ooops showHideSection(String name, Boolean show){
+        XTextSection section = getSection(name, component);
+        if( section != null ){
+            XPropertySet xPropertySet = UnoRuntime.queryInterface(XPropertySet.class, section);
+            try {
+                xPropertySet.setPropertyValue("IsVisible", show);
+            } catch (UnknownPropertyException e) {
+                e.printStackTrace();
+            } catch (PropertyVetoException e) {
+                e.printStackTrace();
+            } catch (IllegalArgumentException e) {
+                e.printStackTrace();
+            } catch (WrappedTargetException e) {
+                e.printStackTrace();
             }
         }
         return this;
     }
 
+    private void setBookmark(String name, XTextRange anchor) {
+        XText text = anchor.getText();
+        XTextCursor cursor = text.createTextCursorByRange(anchor);
+        XTextDocument document = UnoRuntime.queryInterface(XTextDocument.class, component);
+        XMultiServiceFactory factory = UnoRuntime.queryInterface(XMultiServiceFactory.class, document);
+        Object bookmark;
+        try {
+            bookmark = factory.createInstance("com.sun.star.text.Bookmark");
+            XNamed named = UnoRuntime.queryInterface(XNamed.class, bookmark);
+            named.setName(name);
+            XText documentText = cursor.getText();
+            XTextContent textContent = UnoRuntime.queryInterface(XTextContent.class, bookmark);
+            documentText.insertTextContent(cursor, textContent, Boolean.TRUE);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static String columnName(Integer idx) {
+        StringBuilder s = new StringBuilder();
+        while( idx>=26 ){
+            s.insert(0, (char) ('A' + idx % 26));
+            idx = idx / 26 - 1;
+        }
+        s.insert(0, (char) ('A' + idx));
+        return s.toString();
+    }
+
+    public Ooops removeTable(String name){
+        XTextTable textTable = getTextTable(name, component);
+        XModel model = UnoRuntime.queryInterface(XModel.class, component);
+
+        XTextDocument textDocument = UnoRuntime.queryInterface(XTextDocument.class, model);
+        XText text = textDocument.getText();
+        try {
+            text.removeTextContent(UnoRuntime.queryInterface(XTextContent.class, textTable));
+        } catch (NoSuchElementException e) {
+            e.printStackTrace();
+        }
+        return this;
+    }
+
+    public Ooops fillTable(String name, List<List<String>> values){
+        if( values==null ){
+            removeTable(name);
+        }
+        XTextTable textTable = getTextTable(name, component);
+
+        XModel model = UnoRuntime.queryInterface(XModel.class, component);
+        XController controller = model.getCurrentController();
+        XSelectionSupplier supplier = UnoRuntime.queryInterface(XSelectionSupplier.class, controller);
+
+        // append columns
+        Integer numOfRowsInTable = textTable.getRows().getCount();
+        Integer numOfCols;
+        if( values.get(0)==null ){
+            // skip headers
+            numOfCols = values.get(1).size();
+        }else {
+            numOfCols = values.get(0).size();
+        }
+        int initNumOfCols = textTable.getColumns().getCount();
+        for( Integer i=0; i<(numOfCols-initNumOfCols); i++ ){
+            XCellRange textTableCellRange = UnoRuntime.queryInterface(XCellRange.class, textTable);
+            String copyRangeName = columnName(i) + "1:" + columnName(i) + numOfRowsInTable.toString();
+            XCellRange copyCellRange = textTableCellRange.getCellRangeByName(copyRangeName);
+            try {
+                supplier.select(copyCellRange);
+                dispatchHelper.executeDispatch(UnoRuntime.queryInterface(XDispatchProvider.class, controller.getFrame()), ".uno:Copy", "", 0, new PropertyValue[]{new PropertyValue()});
+            } catch (IllegalArgumentException e) {
+                e.printStackTrace();
+            }
+            textTable.getColumns().insertByIndex(textTable.getColumns().getCount(), 1);
+            String lastColumnName = columnName(textTable.getColumns().getCount()-1);
+            String lastColumnRangeName = lastColumnName + "1:" + lastColumnName + numOfRowsInTable.toString();
+            XCellRange pasteCellRange = textTableCellRange.getCellRangeByName(lastColumnRangeName);
+            try {
+                supplier.select(pasteCellRange);
+                dispatchHelper.executeDispatch(UnoRuntime.queryInterface(XDispatchProvider.class, controller.getFrame()), ".uno:Paste", "", 0, null);
+            } catch (IllegalArgumentException e) {
+                e.printStackTrace();
+            }
+        }
+
+        // append rows
+        int numOfRows = values.size();
+        if( numOfRows>numOfRowsInTable ) {
+            textTable.getRows().insertByIndex(numOfRowsInTable, numOfRows - numOfRowsInTable);
+        }
+        Integer r=1;
+        for( List<String> row: values ){
+            Integer c=0;
+            if( row!=null ) {
+                for (String value : row) {
+                    XCell cell = textTable.getCellByName(columnName(c) + r.toString());
+                    XText text = UnoRuntime.queryInterface(XText.class, cell);
+                    if( text!=null ) {
+                        text.setString(value);
+                    }
+                    c++;
+                }
+            }
+            r++;
+        }
+        return this;
+    }
+
+
+
+    /*
+     *   discovers
+     */
+    private XTextRange getTextRange(String bookmarkName, XComponent component){
+        XBookmarksSupplier supplier = UnoRuntime.queryInterface(XBookmarksSupplier.class, component);
+        XNameAccess bookmarks = supplier.getBookmarks();
+        try {
+            Object bookmark = bookmarks.getByName(bookmarkName);
+            XTextContent content = UnoRuntime.queryInterface(XTextContent.class, bookmark);
+            XTextRange range = content.getAnchor();
+            return range;
+        } catch (NoSuchElementException ex) {
+            Logger.getLogger(Ooops.class.getName()).log(Level.WARNING, "unable to find "+bookmarkName+" bookmark");
+        } catch (WrappedTargetException ex) {
+            Logger.getLogger(Ooops.class.getName()).log(Level.WARNING, "unable to find "+bookmarkName+" bookmark");
+        }
+        return null;
+    }
+
+    private XTextSection getSection(String sectionName, XComponent component){
+        XTextSectionsSupplier supplier = UnoRuntime.queryInterface(XTextSectionsSupplier.class, component);
+        XNameAccess sections = supplier.getTextSections();
+        try {
+            Object section = sections.getByName(sectionName);
+            XTextSection textSection = UnoRuntime.queryInterface(XTextSection.class, section);
+            return textSection;
+        } catch (NoSuchElementException e) {
+            Logger.getLogger(Ooops.class.getName()).log(Level.WARNING, "unable to find "+sectionName+" section");
+        } catch (WrappedTargetException e) {
+            Logger.getLogger(Ooops.class.getName()).log(Level.WARNING, "unable to find "+sectionName+" section");
+        }
+        return null;
+    }
+
+    private XTextTable getTextTable(String tableName, XComponent component){
+        XTextTablesSupplier supplier = UnoRuntime.queryInterface(XTextTablesSupplier.class, component);
+        XNameAccess tables = supplier.getTextTables();
+        try {
+            Object table = tables.getByName(tableName);
+            XTextTable textTable = UnoRuntime.queryInterface(XTextTable.class, table);
+            return textTable;
+        } catch (NoSuchElementException ex) {
+            Logger.getLogger(Ooops.class.getName()).log(Level.WARNING, "unable to find " + tableName + " table");
+        } catch (WrappedTargetException ex) {
+            Logger.getLogger(Ooops.class.getName()).log(Level.WARNING, "unable to find " + tableName + " table");
+        }
+        return null;
+    }
+
+
+    /*
+     *   outs
+     */
     public Ooops filter(Filter oooFilter){
         filter = oooFilter;
         return this;
@@ -127,21 +378,38 @@ public class Ooops {
         propertyValue[0].Value = outStream;
         propertyValue[1] = new PropertyValue();
         propertyValue[1].Name = "FilterName";
-        propertyValue[1].Value = filter.name();
+        propertyValue[1].Value = filter.filterName();
         XStorable xstorable = UnoRuntime.queryInterface(XStorable.class, component);
         try {
             xstorable.storeToURL("private:stream", propertyValue);
             return outStream;
-        } catch (IOException ex) {
+        } catch (com.sun.star.io.IOException ex) {
+            Logger.getLogger(Ooops.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        return null;
+    }
+
+    public Boolean toUrl(String storeUrl){
+        if( component == null ){
+            blank();
+        }
+        PropertyValue[] propertyValue = new PropertyValue[1];
+        propertyValue[0] = new PropertyValue();
+        propertyValue[0].Name = "FilterName";
+        propertyValue[0].Value = "writer_pdf_Export";
+        XStorable xstorable = UnoRuntime.queryInterface(XStorable.class, component);
+        try {
+            xstorable.storeToURL(storeUrl, propertyValue);
+            return true;
+        } catch (com.sun.star.io.IOException ex) {
             Logger.getLogger(Ooops.class.getName()).log(Level.SEVERE, null, ex);
         }
         return null;
     }
 
     public Boolean toStream(OutputStream outputStream){
-        OoopsOutputStream stream = (OoopsOutputStream) stream();
         try {
-            outputStream.write(stream.toByteArray());
+            outputStream.write(toByteArray());
             return Boolean.TRUE;
         } catch (java.io.IOException e) {
             e.printStackTrace();
@@ -149,50 +417,23 @@ public class Ooops {
         return Boolean.FALSE;
     }
 
-
-
-    private XComponent loadDocumentComponent(OoopsInputStream inStream){
-        Boolean hidden = Boolean.TRUE;
-        try {
-            PropertyValue[] propertyValue = new PropertyValue[2];
-            propertyValue[0] = new PropertyValue();
-            propertyValue[0].Name = "InputStream";
-            propertyValue[0].Value = inStream;
-            if( hidden ){
-                propertyValue[1] = new PropertyValue();
-                propertyValue[1].Name = "Hidden";
-                propertyValue[1].Value = new Boolean(true);
-            } else {
-                propertyValue[1] = new PropertyValue();
-                propertyValue[1].Name = "Hidden";
-                propertyValue[1].Value = new Boolean(false);
-            }
-            try {
-                XComponent xComponent = loader.loadComponentFromURL("private:stream", "_blank", 0, propertyValue);
-                return xComponent;
-            } catch (com.sun.star.lang.IllegalArgumentException e) {
-                e.printStackTrace();
-            }
-        } catch (IOException ex) {
-            Logger.getLogger(Ooops.class.getName()).log(Level.SEVERE, null, ex);
-        }
-        return null;
+    public byte[] toByteArray() {
+        OoopsOutputStream stream = (OoopsOutputStream) stream();
+        return stream.toByteArray();
     }
 
-    private XTextRange getAnchor(String anchorName, XComponent component){
-        XBookmarksSupplier supplier = UnoRuntime.queryInterface(XBookmarksSupplier.class, component);
-        XNameAccess bookmarks = supplier.getBookmarks();
-        try {
-            Object myBookmark = bookmarks.getByName(anchorName);
-            XTextContent content = UnoRuntime.queryInterface(XTextContent.class, myBookmark);
-            XTextRange range = content.getAnchor();
-            return range;
-        } catch (NoSuchElementException ex) {
-            Logger.getLogger(Ooops.class.getName()).log(Level.WARNING, "unable to find "+anchorName+" anchor", ex);
-        } catch (WrappedTargetException ex) {
-            Logger.getLogger(Ooops.class.getName()).log(Level.WARNING, "unable to find "+anchorName+" anchor", ex);
+
+    private void disposeComponent() {
+        XCloseable closeable = UnoRuntime.queryInterface(XCloseable.class, component);
+        if (closeable != null) {
+            try {
+                closeable.close(true);
+            } catch (CloseVetoException e) {
+            }
+
+        } else {
+            component.dispose();
         }
-        return null;
     }
 
 
