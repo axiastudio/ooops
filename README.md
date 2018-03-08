@@ -17,3 +17,11 @@ Ooops.create()
         .filter(Filter.PDF)
         .toStream(new FileOutputStream(new File("test.pdf")));
 ```
+
+You need an [Open|Libre]Office listener.
+
+For example (Docker):
+
+```bash
+docker run -p 8997:8997 -d xcgd/libreoffice
+```
