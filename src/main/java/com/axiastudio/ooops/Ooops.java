@@ -385,6 +385,8 @@ public class Ooops {
             return outStream;
         } catch (com.sun.star.io.IOException ex) {
             Logger.getLogger(Ooops.class.getName()).log(Level.SEVERE, null, ex);
+        } finally {
+            close();
         }
         return null;
     }
@@ -403,6 +405,8 @@ public class Ooops {
             return true;
         } catch (com.sun.star.io.IOException ex) {
             Logger.getLogger(Ooops.class.getName()).log(Level.SEVERE, null, ex);
+        } finally {
+            close();
         }
         return null;
     }
@@ -413,26 +417,32 @@ public class Ooops {
             return Boolean.TRUE;
         } catch (java.io.IOException e) {
             e.printStackTrace();
+        } finally {
+            close();
         }
         return Boolean.FALSE;
     }
 
     public byte[] toByteArray() {
         OoopsOutputStream stream = (OoopsOutputStream) stream();
+        close();
         return stream.toByteArray();
     }
 
 
-    private void disposeComponent() {
-        XCloseable closeable = UnoRuntime.queryInterface(XCloseable.class, component);
-        if (closeable != null) {
-            try {
-                closeable.close(true);
-            } catch (CloseVetoException e) {
-            }
+    private void close() {
+        XModel model = UnoRuntime.queryInterface(XModel.class, component);
+        if (model!=null) {
+            XCloseable closeable = UnoRuntime.queryInterface(XCloseable.class, model);
+            if (closeable != null) {
+                try {
+                    closeable.close(true);
+                } catch (CloseVetoException e) {
 
-        } else {
-            component.dispose();
+                }
+            } else {
+                component.dispose();
+            }
         }
     }
 
